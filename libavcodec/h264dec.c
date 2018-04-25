@@ -57,8 +57,6 @@
 
 #include "ccaption708_dec.h"
 #include "ccaptionXDS_dec.h"
-
-
 static int h264_decode_end(AVCodecContext *avctx);
 
 const uint16_t ff_h264_mb_sizes[4] = { 256, 384, 512, 768 };
@@ -1073,6 +1071,7 @@ static int h264_decode_cc(AVCodecContext *avctx, void *data,
         if (!cc){
             return 0;
         }
+	printf("DECODE!");
 
         cc_708_ctx* temp_cc_708_ctx = cc->cc708ctx;
         if (! temp_cc_708_ctx){
@@ -1091,7 +1090,7 @@ static int h264_decode_cc(AVCodecContext *avctx, void *data,
             cc->expected_cc_count = 20;
         
         cc->cc708ctx->fsd = fsd;
-        cc->cc_decode->xds_ctx->fsd = fsd;
+	cc->cc_decode->xds_ctx->fsd = fsd;
         cc->cc608ctx1->fsd = fsd;
         cc->cc608ctx2->fsd = fsd;
         

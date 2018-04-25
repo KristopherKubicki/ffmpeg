@@ -534,6 +534,7 @@ static int xds_do_current_and_future (
 		return CC_EINVAL;
     }
 
+	printf("Kpacket type:",ctx->cur_xds_packet_type);
 	switch (ctx->cur_xds_packet_type){
 		case XDS_TYPE_PIN_START_TIME:
 			was_proc=1;
@@ -678,6 +679,7 @@ static int xds_do_current_and_future (
 				
                 if (ctx->cur_xds_payload[i]>=0x20 && ctx->cur_xds_payload[i]<0x7F){
 					snprintf(tstr,str_len - (tstr - str),"[%s] ",XDSProgramTypes[ctx->cur_xds_payload[i]-0x20]);
+					printf("here: %s",tstr);
 					tstr += strlen(tstr);
 				}
 

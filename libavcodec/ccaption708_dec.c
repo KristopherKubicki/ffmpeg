@@ -516,11 +516,10 @@ static void _708_handle_DFx_DefineWindow(cc_708_ctx *dtvcc, cc_708_service_decod
 	int pen_style = data[6] & 0x7;
 	int win_style = (data[6] >> 3) & 0x7;
 
-        if (row_count > 15 || col_count*2 > 64)
+        if (row_count > 15 || col_count > 64)
             dp->abnormal_window_size = 1;
-        
-         if (row_count > 15 || col_count > 32)
-            dp->boundary_violation = 1;
+
+
 
 	int do_clear_window = 0;
 
@@ -586,12 +585,9 @@ static void _708_handle_DFx_DefineWindow(cc_708_ctx *dtvcc, cc_708_service_decod
 		if (!window->memory_reserved) {
 			for (int i = 0; i < CCX_708_MAX_ROWS; i++) {
 				window->rows[i] = (cc_708_symbol *) malloc(CCX_708_MAX_COLUMNS * sizeof(cc_708_symbol));
-                if (!window->rows[i]) {
-                    ; //ccx_common_logging.fatal_ftn(EXIT_NOT_ENOUGH_MEMORY, "[CEA-708] dtvcc_handle_DFx_DefineWindow");
-                    printf("ccaption708_dec.c::_708_handle_DFx_DefineWindow() [CEA-708] -> EXIT_NOT_ENOUGH_MEMORY\n");
-                    abort();
-                }
-            }
+				if (!window->rows[i])
+					;//ccx_common_logging.fatal_ftn(EXIT_NOT_ENOUGH_MEMORY, "[CEA-708] dtvcc_handle_DFx_DefineWindow");
+			}
 			window->memory_reserved = 1;
 		}
 		window->is_defined = 1;
@@ -909,7 +905,6 @@ static void init_data_points(AVFrameSideData *fsd) {
         svc_dp->svc_dps[k].abnormal_window_position = 0;
         svc_dp->svc_dps[k].abnormal_control_codes = 0;
         svc_dp->svc_dps[k].abnormal_characters = 0;
-        svc_dp->svc_dps[k].boundary_violation = 0;
     }
 
     fsd->cc608_dp.roll_up_error = 0;
@@ -925,12 +920,10 @@ static void init_data_points(AVFrameSideData *fsd) {
     fsd->cc608_dp.popon_oos_error = 0;
     fsd->cc608_dp.rollup_missing_error = 0;
     fsd->cc608_dp.rollup_oos_error = 0;
-    
-    //xsd
+
     fsd->cc608_dp.xds_checksum_error = 0;
     fsd->cc608_dp.xds_invalid_characters = 0;
     fsd->cc608_dp.xds_invalid_pkt_structure = 0;
-    
 }
 
 ////
@@ -1678,18 +1671,16 @@ static void cc_708_process_current_data(cc_708_ctx *cc708ctx) {
 		}
 
 		if (service_number > 0 ) {
-			int service_number_index = service_number - 1;
-			cc708ctx->cur_service_number = service_number_index;
-			cc708ctx->fsd->svcs_dp_708.service_number[service_number_index] = service_number;
+			cc708ctx->fsd->svcs_dp_708.service_number[service_number - 1] = service_number;
 			
-			(&cc708ctx->fsd->svcs_dp_708.svc_dps[service_number_index])->svc_type = (SVC_TYPE)service_number;
-			cc708ctx->services_active[service_number_index] = 1;
+			(&cc708ctx->fsd->svcs_dp_708.svc_dps[service_number - 1])->svc_type = (SVC_TYPE)service_number;
+			cc708ctx->services_active[service_number - 1] = 1;
 			
-			if(cc708ctx->decoders[service_number_index] == NULL){
-				cc708ctx->decoders[service_number_index] = (cc_708_service_decoder*)malloc(sizeof(cc_708_service_decoder));
+			if(cc708ctx->decoders[service_number - 1] == NULL){
+				cc708ctx->decoders[service_number - 1] = (cc_708_service_decoder*)malloc(sizeof(cc_708_service_decoder));
 
 				// init this decoder
-				cc_708_service_decoder* decoder = cc708ctx->decoders[service_number_index];
+				cc_708_service_decoder* decoder = cc708ctx->decoders[service_number - 1];
 				decoder->cc_count = 0;
 
 				for (int j = 0; j < CC_708_MAX_WINDOWS; j++)
@@ -1699,7 +1690,7 @@ static void cc_708_process_current_data(cc_708_ctx *cc708ctx) {
 			}
 
 			cc_708_process_service_block(cc708ctx,
-				cc708ctx->decoders[service_number_index], pos, block_length);
+				cc708ctx->decoders[service_number - 1], pos, block_length);
 
 		}
 		pos += block_length; // Skip data

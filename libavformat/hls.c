@@ -207,7 +207,6 @@ typedef struct HLSContext {
 
     int cur_seq_no;
     int live_start_index;
-    char *selected_variant_id;
     int first_packet;
     int64_t first_timestamp;
     int64_t cur_timestamp;
@@ -220,19 +219,6 @@ typedef struct HLSContext {
     int strict_std_compliance;
     char *allowed_extensions;
 } HLSContext;
-
-// Compares low-level m3u8 filenames (not including path but including extension) to check if user selected this variant
-static int is_selected(const char * current_variant_url, const char *selected_variant_url)
-{
-    char *current_variant_filename = av_basename(current_variant_url);
-    int str_len = strlen(current_variant_filename);
-    char *selected_variant_filename = av_basename(selected_variant_url);
-    int suffix_len = strlen(selected_variant_filename);
-
-    return 
-        (str_len >= suffix_len) &&
-        (0 == strcmp(current_variant_filename + (str_len-suffix_len), selected_variant_filename));
-}
 
 static int read_chomp_line(AVIOContext *s, char *buf, int maxlen)
 {
@@ -444,7 +430,7 @@ static struct segment *new_init_section(struct playlist *pls,
         return NULL;
     }
 
-    // Parsed Segment Size
+    sec->actual_size = 0;
     if (info->byterange[0]) {
         sec->size = strtoll(info->byterange, NULL, 10);
         ptr = strchr(info->byterange, '@');
@@ -454,16 +440,6 @@ static struct segment *new_init_section(struct playlist *pls,
         /* the entire file is the init section */
         sec->size = -1;
     }
-
-    // Actual Segment Size
-    URLContext* urlCtx;
-    //int ret = ffurl_alloc(&urlCtx, "", 0, 0);
-    if (ffurl_open(&urlCtx, sec->url, 0, 0, NULL) >= 0)
-        sec->actual_size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
-    else
-        sec->actual_size = -1;
-    ffurl_close(urlCtx);
-    //av_log(NULL, AV_LOG_INFO, "Init Segment: url: %s,  size = %d / %d\n", sec->url, sec->size, sec->actual_size);
 
     dynarray_add(&pls->init_sections, &pls->n_init_sections, sec);
 
@@ -826,8 +802,7 @@ static int parse_playlist(HLSContext *c, const char *url,
         } else if (av_strstart(line, "#", NULL)) {
             continue;
         } else if (line[0]) {
-            if ( is_variant && is_selected(line, c->selected_variant_id) ) {
-                av_log(c, AV_LOG_INFO, "Variant %s selected\n", line);
+            if (is_variant) {
                 if (!new_variant(c, &variant_info, line, url)) {
                     ret = AVERROR(ENOMEM);
                     goto fail;
@@ -882,7 +857,7 @@ static int parse_playlist(HLSContext *c, const char *url,
                 dynarray_add(&pls->segments, &pls->n_segments, seg);
                 is_segment = 0;
 
-                // Parsed Segment Size
+                seg->actual_size = 0;
                 seg->size = seg_size;
                 if (seg_size >= 0) {
                     seg->url_offset = seg_offset;
@@ -892,7 +867,6 @@ static int parse_playlist(HLSContext *c, const char *url,
                     seg->url_offset = 0;
                     seg_offset = 0;
                 }
-                seg->actual_size = -1;
 
                 seg->init_section = cur_init_section;
             }
@@ -1275,6 +1249,8 @@ static int update_init_section(struct playlist *pls, struct segment *seg)
 
     ret = read_from_url(pls, seg->init_section, pls->init_sec_buf,
                         pls->init_sec_buf_size, READ_COMPLETE);
+    if (ret > 0)
+        seg->init_section->actual_size += ret;
 
     ff_format_io_close(pls->parent, &pls->input);
 
@@ -1316,11 +1292,6 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
     if(v->input) {
         interal = (struct AVIOInternal*)v->input->opaque;
         urlc = (URLContext*)interal->h;
-        struct segment *seg = current_segment(v);
-        // Get actual segment size 
-        if (seg->actual_size == -1) {
-            seg->actual_size = ffurl_seek(urlc, 0, AVSEEK_SIZE);
-        }
         v->mpegts_parser_input_backup = urlc->mpegts_parser_injection;
         v->mpegts_parser_input_context_backup = urlc->mpegts_parser_injection_context;
     }
@@ -1414,6 +1385,7 @@ reload:
 
     ret = read_from_url(v, current_segment(v), buf, buf_size, READ_NORMAL);
     if (ret > 0) {
+        current_segment(v)->actual_size += ret;
         if (just_opened && v->is_id3_timestamped != 0) {
             /* Intercept ID3 tags here, elementary audio streams are required
              * to convey timestamps using them in the beginning of each segment. */
@@ -1603,6 +1575,7 @@ static void add_stream_to_programs(AVFormatContext *s, struct playlist *pls, AVS
         for (j = 0; j < v->n_playlists; j++) {
             if (v->playlists[j] != pls)
                 continue;
+
             av_program_add_stream_index(s, i, stream->index);
 
             if (bandwidth < 0)
@@ -2225,9 +2198,6 @@ static const AVOption hls_options[] = {
         OFFSET(allowed_extensions), AV_OPT_TYPE_STRING,
         {.str = "3gp,aac,avi,flac,mkv,m3u8,m4a,m4s,m4v,mpg,mov,mp2,mp3,mp4,mpeg,mpegts,ogg,ogv,oga,ts,vob,wav"},
         INT_MIN, INT_MAX, FLAGS},
-    {"selected_variant_id", "selected low-level manifests (variants)", 
-        OFFSET(selected_variant_id), AV_OPT_TYPE_STRING, 
-        {.str = ""}, INT_MIN, INT_MAX, FLAGS},
     {NULL}
 };
 

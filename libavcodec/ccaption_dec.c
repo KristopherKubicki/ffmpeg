@@ -23,14 +23,89 @@
 #include "ass.h"
 #include "libavutil/opt.h"
 
-#define SCREEN_ROWS 15
-#define SCREEN_COLUMNS 32
+#define SCREEN_ROWS 30
+#define SCREEN_COLUMNS 64
+
+#define XDS_CLASS_CURRENT       0
+#define XDS_CLASS_FUTURE        1
+#define XDS_CLASS_CHANNEL       2
+#define XDS_CLASS_MISC          3
+#define XDS_CLASS_PUBLIC        4
+#define XDS_CLASS_RESERVED      5
+#define XDS_CLASS_PRIVATE       6
+#define XDS_CLASS_END           7
+#define XDS_CLASS_OUT_OF_BAND 0x40 // Not a real class, a marker for packets for out-of-band data.
+
+// Types for the classes current and future
+#define   XDS_TYPE_PIN_START_TIME                                 1
+#define   XDS_TYPE_LENGH_AND_CURRENT_TIME                         2
+#define   XDS_TYPE_PROGRAM_NAME                                   3
+#define   XDS_TYPE_PROGRAM_TYPE                                   4
+#define   XDS_TYPE_CONTENT_ADVISORY                               5
+#define   XDS_TYPE_AUDIO_SERVICES                                 6
+#define   XDS_TYPE_CGMS                                           8  //Copy Generation Management System
+#define   XDS_TYPE_ASPECT_RATIO_INFO   9    //Appears in CEA-608-B but in E it's been removed as is "reserved"
+#define   XDS_TYPE_PROGRAM_DESC_1      0x10
+#define   XDS_TYPE_PROGRAM_DESC_2      0x11
+#define   XDS_TYPE_PROGRAM_DESC_3      0x12
+#define   XDS_TYPE_PROGRAM_DESC_4      0x13
+#define   XDS_TYPE_PROGRAM_DESC_5      0x14
+#define   XDS_TYPE_PROGRAM_DESC_6      0x15
+#define   XDS_TYPE_PROGRAM_DESC_7      0x16
+#define   XDS_TYPE_PROGRAM_DESC_8      0x17
+
+// Types for the class channel
+#define   XDS_TYPE_NETWORK_NAME               1
+#define   XDS_TYPE_CALL_LETTERS_AND_CHANNEL   2
+#define   XDS_TYPE_TSID                       4 //Transmission Signal Identifier
+
+// Types for miscellaneous packets
+#define   XDS_TYPE_TIME_OF_DAY                  1
+#define   XDS_TYPE_LOCAL_TIME_ZONE              4
+#define   XDS_TYPE_OUT_OF_BAND_CHANNEL_NUMBER   0x40
 
 #define SET_FLAG(var, val)   ( (var) |=   ( 1 << (val)) )
 #define UNSET_FLAG(var, val) ( (var) &=  ~( 1 << (val)) )
 #define CHECK_FLAG(var, val) ( (var) &    ( 1 << (val)) )
 
+char xds_program_name[33];
+int xds_program_inc = 0;
+
 static const AVRational ms_tb = {1, 1000};
+
+static const char *XDSclasses[]= {
+        "Current"        ,
+        "Future"         ,
+        "Channel"        ,
+        "Miscellaneous"  ,
+        "Public service" ,
+        "Reserved"       ,
+        "Private data"   ,
+        "End"
+};
+
+static const char *XDSProgramTypes[]= {
+        "Education"   , "Entertainment" , "Movie"       , "News"          , "Religious"    ,
+        "Sports"      , "Other"         , "Action"      , "Advertisement" , "Animated"     ,
+        "Anthology"   , "Automobile"    , "Awards"      , "Baseball"      , "Basketball"   ,
+        "Bulletin"    , "Business"      , "Classical"   , "College"       , "Combat"       ,
+        "Comedy"      , "Commentary"    , "Concert"     , "Consumer"      , "Contemporary" ,
+        "Crime"       , "Dance"         , "Documentary" , "Drama"         , "Elementary"   ,
+        "Erotica"     , "Exercise"      , "Fantasy"     , "Farm"          , "Fashion"      ,
+        "Fiction"     , "Food"          , "Football"    , "Foreign"       , "Fund-Raiser"  ,
+        "Game/Quiz"   , "Garden"        , "Golf"        , "Government"    , "Health"       ,
+        "High_School" , "History"       , "Hobby"       , "Hockey"        , "Home"         ,
+        "Horror"      , "Information"   , "Instruction" , "International" , "Interview"    ,
+        "Language"    , "Legal"         , "Live"        , "Local"         , "Math"         ,
+        "Medical"     , "Meeting"       , "Military"    , "Mini-Series"   , "Music"        ,
+        "Mystery"     , "National"      , "Nature"      , "Police"        , "Politics"     ,
+        "Premiere"    , "Pre-Recorded"  , "Product"     , "Professional"  , "Public"       ,
+        "Racing"      , "Reading"       , "Repair"      , "Repeat"        , "Review"       ,
+        "Romance"     , "Science"       , "Series"      , "Service"       , "Shopping"     ,
+        "Soap_Opera"  , "Special"       , "Suspense"    , "Talk"          , "Technical"    ,
+        "Tennis"      , "Travel"        , "Variety"     , "Video"         , "Weather"      ,
+        "Western"
+};
 
 /*
  * TODO list
@@ -246,6 +321,8 @@ typedef struct CCaptionSubContext {
     int screen_touched;
     int64_t last_real_time;
     char prev_cmd[2];
+    char packet_type;
+    char packet_class;
     /* buffer to store pkt data */
     uint8_t *pktbuf;
     int pktbuf_size;
@@ -658,7 +735,7 @@ static void handle_char(CCaptionSubContext *ctx, char hi, char lo, int64_t pts)
        ff_dlog(ctx, "(%c)\n", hi);
 }
 
-static void process_cc608(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint8_t lo)
+static void process_xds(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint8_t lo)
 {
     if (hi == ctx->prev_cmd[0] && lo == ctx->prev_cmd[1]) {
         /* ignore redundant command */
@@ -669,13 +746,148 @@ static void process_cc608(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint
     ctx->prev_cmd[0] = hi;
     ctx->prev_cmd[1] = lo;
 
+
+    if (hi>=0x01 && hi<=0x0f) {
+      if ((hi-1)/2 == XDS_CLASS_END && ctx->packet_type == XDS_TYPE_PROGRAM_NAME && xds_program_inc > 0)  {
+        printf("name: ");
+        for (int j=0;j<xds_program_inc;j++) {
+          printf("%c",xds_program_name[j]);
+        }
+        printf("\n");
+        xds_program_inc = 0;
+      }
+      ctx->packet_class = (hi-1)/2;
+    }
+
     if ( (hi == 0x10 && (lo >= 0x40 && lo <= 0x5f)) ||
        ( (hi >= 0x11 && hi <= 0x17) && (lo >= 0x40 && lo <= 0x7f) ) ) {
+        //printf("pac1: %d %d :: %d\n",hi,lo,(hi<=0x17)? 1 : 2);
+        //handle_pac(ctx, hi, lo);
+    } else if ( ( hi == 0x11 && lo >= 0x20 && lo <= 0x2f ) ||
+                ( hi == 0x17 && lo >= 0x2e && lo <= 0x2f) ) {
+        //printf("pac2: %d %d \n",hi,lo);
+        //handle_textattr(ctx, hi, lo);
+    } else if (hi == 0x14 || hi == 0x15 || hi == 0x1c) {
+        //printf("pac3: %d %d \n",hi,lo);
+        switch (lo) {
+        case 0x20:
+            /* resume caption loading */
+            ctx->mode = CCMODE_POPON;
+            break;
+        case 0x24:
+            handle_delete_end_of_row(ctx, hi, lo);
+            break;
+        case 0x25:
+        case 0x26:
+        case 0x27:
+            ctx->rollup = lo - 0x23;
+            ctx->mode = CCMODE_ROLLUP;
+            break;
+        case 0x29:
+            /* resume direct captioning */
+            ctx->mode = CCMODE_PAINTON;
+            break;
+        case 0x2b:
+            /* resume text display */
+            ctx->mode = CCMODE_TEXT;
+            break;
+        case 0x2c:
+            /* erase display memory */
+            //handle_edm(ctx, pts);
+            break;
+        case 0x2d:
+            /* carriage return */
+            ff_dlog(ctx, "carriage return\n");
+            if (!ctx->real_time)
+                reap_screen(ctx, pts);
+            roll_up(ctx);
+            ctx->cursor_column = 0;
+            break;
+        case 0x2e:
+            /* erase buffered (non displayed) memory */
+            // Only in realtime mode. In buffered mode, we re-use the inactive screen
+            // for our own buffering.
+            if (ctx->real_time) {
+                struct Screen *screen = ctx->screen + !ctx->active_screen;
+                screen->row_used = 0;
+            }
+            break;
+        case 0x2f:
+            /* end of caption */
+            ff_dlog(ctx, "handle_eoc\n");
+            //handle_eoc(ctx, pts);
+            break;
+        default:
+            printf("unknown command1: %d %d \n",hi,lo);
+            ff_dlog(ctx, "Unknown command 0x%hhx 0x%hhx\n", hi, lo);
+            break;
+        }
+    } else if (hi >= 0x11 && hi <= 0x13) {
+        /* Special characters */
+        printf("SPECIAL %c%c",hi,lo);
+        //printf("char1: %d %d %c\n",hi,lo,lo);
+        //handle_char(ctx, hi, lo, pts);
+    } else if (ctx->packet_class == XDS_CLASS_CHANNEL) {
+      printf("CHANNEL: %c%c\n",hi,lo);
+    } else if (hi >= 0x20 && ctx->packet_class == XDS_CLASS_CURRENT) {
+        /* Standard characters (always in pairs) */
+        if (ctx->packet_type == XDS_TYPE_PROGRAM_TYPE) {
+          //printf("PIN TIME: %c%c\n",hi,lo);
+        } else if (ctx->packet_type == XDS_TYPE_LENGH_AND_CURRENT_TIME) { 
+          //printf("LENGTH TIME: %c%c\n",hi,lo);
+        } else if (ctx->packet_type == XDS_TYPE_PROGRAM_NAME) { 
+          xds_program_name[xds_program_inc++] = hi;
+          xds_program_name[xds_program_inc++] = lo;
+        } else if (ctx->packet_type == XDS_TYPE_PROGRAM_TYPE) {
+          printf("TYPE: %c%c : %s\n",hi,lo,XDSProgramTypes[hi-0x20]);
+          //handle_char(ctx, hi, lo, pts);
+          //ctx->prev_cmd[0] = ctx->prev_cmd[1] = 0;
+        } else if (ctx->packet_type == XDS_TYPE_CONTENT_ADVISORY) { 
+          //printf("ADVISORY: %c%c\n",hi,lo);
+        } else {
+          printf("%d : %c%c\n",ctx->packet_type,hi,lo);
+        }
+    // this looks wrong
+    } else if (hi == 0x17 && lo >= 0x21 && lo <= 0x23) {
+        int i;
+        /* Tab offsets (spacing) */
+        for (i = 0; i < lo - 0x20; i++) {
+            //printf("\n");
+            //handle_char(ctx, ' ', 0, pts);
+        }
+    } else {
+        /* Ignoring all other non data code */
+	if (hi == 1) {
+          ctx->packet_type = lo;
+        } else {
+          //printf("unknown command2: %d %d 0x%hhx 0x%hhx\n",hi,lo,hi,lo);
+        }
+        ff_dlog(ctx, "Unknown command 0x%hhx 0x%hhx\n", hi, lo);
+    }
+}
+
+static void process_cc608(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint8_t lo)
+{
+    if (hi == ctx->prev_cmd[0] && lo == ctx->prev_cmd[1]) {
+        /* ignore redundant command */
+        return;
+    }
+
+    /* set prev command */
+    ctx->prev_cmd[0] = hi;
+    ctx->prev_cmd[1] = lo;
+    //printf("\r[%02X:%02X]\n",hi,lo);
+
+    if ( (hi == 0x10 && (lo >= 0x40 && lo <= 0x5f)) ||
+       ( (hi >= 0x11 && hi <= 0x17) && (lo >= 0x40 && lo <= 0x7f) ) ) {
+        //printf("pac1: %d %d :: %d\n",hi,lo,(hi<=0x17)? 1 : 2);
         handle_pac(ctx, hi, lo);
     } else if ( ( hi == 0x11 && lo >= 0x20 && lo <= 0x2f ) ||
                 ( hi == 0x17 && lo >= 0x2e && lo <= 0x2f) ) {
+        //printf("pac2: %d %d \n",hi,lo);
         handle_textattr(ctx, hi, lo);
     } else if (hi == 0x14 || hi == 0x15 || hi == 0x1c) {
+        //printf("pac3: %d %d \n",hi,lo);
         switch (lo) {
         case 0x20:
             /* resume caption loading */
@@ -725,14 +937,17 @@ static void process_cc608(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint
             handle_eoc(ctx, pts);
             break;
         default:
+            printf("unknown command1: %d %d \n",hi,lo);
             ff_dlog(ctx, "Unknown command 0x%hhx 0x%hhx\n", hi, lo);
             break;
         }
     } else if (hi >= 0x11 && hi <= 0x13) {
         /* Special characters */
+        //printf("char1: %d %d \n",hi,lo);
         handle_char(ctx, hi, lo, pts);
     } else if (hi >= 0x20) {
         /* Standard characters (always in pairs) */
+        //printf("char2: %d %d \n",hi,lo);
         handle_char(ctx, hi, lo, pts);
         ctx->prev_cmd[0] = ctx->prev_cmd[1] = 0;
     } else if (hi == 0x17 && lo >= 0x21 && lo <= 0x23) {
@@ -743,6 +958,7 @@ static void process_cc608(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint
         }
     } else {
         /* Ignoring all other non data code */
+        //printf("unknown command2: %d %d 0x%hhx 0x%hhx\n",hi,lo,hi,lo);
         ff_dlog(ctx, "Unknown command 0x%hhx 0x%hhx\n", hi, lo);
     }
 }
@@ -768,19 +984,26 @@ static int decode(AVCodecContext *avctx, void *data, int *got_sub, AVPacket *avp
     for (i  = 0; i < len; i += 3) {
         uint8_t cc_type = *(bptr + i) & 3;
         if (validate_cc_data_pair(bptr + i))
+	    //printf("HERE0: %d\n",cc_type);
+            //process_cc608(ctx, start_time, *(bptr + i + 1) & 0x7f, *(bptr + i + 2) & 0x7f);
+            //process_xds(ctx, start_time, *(bptr + i + 1) & 0x7f, *(bptr + i + 2) & 0x7f);
             continue;
         /* ignoring data field 1 */
-        if(cc_type == 1)
-            continue;
-        else
+        if(cc_type == 1) {
+	    //printf("HERE1: %d\n",cc_type);
+            process_xds(ctx, start_time, *(bptr + i + 1) & 0x7f, *(bptr + i + 2) & 0x7f);
+            //continue;
+	} else {
             process_cc608(ctx, start_time, *(bptr + i + 1) & 0x7f, *(bptr + i + 2) & 0x7f);
+	}
 
         if (!ctx->buffer_changed)
             continue;
         ctx->buffer_changed = 0;
 
         if (*ctx->buffer.str || ctx->real_time)
-        {
+        { 
+//printf("processing: %s \n",ctx->buffer.str);
             ff_dlog(ctx, "cdp writing data (%s)\n",ctx->buffer.str);
             ret = ff_ass_add_rect(sub, ctx->buffer.str, ctx->readorder++, 0, NULL, NULL);
             if (ret < 0)
