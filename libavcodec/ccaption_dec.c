@@ -321,6 +321,7 @@ typedef struct CCaptionSubContext {
     int screen_touched;
     int64_t last_real_time;
     char prev_cmd[2];
+    char program_name[33];
     char packet_type;
     char packet_class;
     /* buffer to store pkt data */
@@ -746,14 +747,17 @@ static void process_xds(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint8_
     ctx->prev_cmd[0] = hi;
     ctx->prev_cmd[1] = lo;
 
-
     if (hi>=0x01 && hi<=0x0f) {
       if ((hi-1)/2 == XDS_CLASS_END && ctx->packet_type == XDS_TYPE_PROGRAM_NAME && xds_program_inc > 0)  {
-        printf("name: ");
-        for (int j=0;j<xds_program_inc;j++) {
-          printf("%c",xds_program_name[j]);
+	if(strcmp(ctx->program_name,xds_program_name)) {
+          memcpy(ctx->program_name, xds_program_name, 33);
+	  av_bprintf(&ctx->buffer, "PROGRAM_NAME: %s", ctx->program_name);
+          ctx->buffer_changed = 1;
+  	  printf("PROGRAM_NAME: %s\n",ctx->program_name);
+	}
+        for (int j=0;j<33;j++) {
+          xds_program_name[j] = 0;
         }
-        printf("\n");
         xds_program_inc = 0;
       }
       ctx->packet_class = (hi-1)/2;
@@ -828,7 +832,7 @@ static void process_xds(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint8_
         //printf("char1: %d %d %c\n",hi,lo,lo);
         //handle_char(ctx, hi, lo, pts);
     } else if (ctx->packet_class == XDS_CLASS_CHANNEL) {
-      printf("CHANNEL: %c%c\n",hi,lo);
+      //printf("CHANNEL: %c%c\n",hi,lo);
     } else if (hi >= 0x20 && ctx->packet_class == XDS_CLASS_CURRENT) {
         /* Standard characters (always in pairs) */
         if (ctx->packet_type == XDS_TYPE_PROGRAM_TYPE) {
@@ -984,15 +988,9 @@ static int decode(AVCodecContext *avctx, void *data, int *got_sub, AVPacket *avp
     for (i  = 0; i < len; i += 3) {
         uint8_t cc_type = *(bptr + i) & 3;
         if (validate_cc_data_pair(bptr + i))
-	    //printf("HERE0: %d\n",cc_type);
-            //process_cc608(ctx, start_time, *(bptr + i + 1) & 0x7f, *(bptr + i + 2) & 0x7f);
-            //process_xds(ctx, start_time, *(bptr + i + 1) & 0x7f, *(bptr + i + 2) & 0x7f);
             continue;
-        /* ignoring data field 1 */
         if(cc_type == 1) {
-	    //printf("HERE1: %d\n",cc_type);
             process_xds(ctx, start_time, *(bptr + i + 1) & 0x7f, *(bptr + i + 2) & 0x7f);
-            //continue;
 	} else {
             process_cc608(ctx, start_time, *(bptr + i + 1) & 0x7f, *(bptr + i + 2) & 0x7f);
 	}
