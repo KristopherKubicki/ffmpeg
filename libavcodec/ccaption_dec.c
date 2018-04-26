@@ -69,7 +69,11 @@
 #define CHECK_FLAG(var, val) ( (var) &    ( 1 << (val)) )
 
 char xds_program_name[33];
+char xds_network_name[33];
+char xds_call_letters[7];
 int xds_program_inc = 0;
+int xds_call_inc = 0;
+int xds_network_inc = 0;
 
 static const AVRational ms_tb = {1, 1000};
 
@@ -322,6 +326,8 @@ typedef struct CCaptionSubContext {
     int64_t last_real_time;
     char prev_cmd[2];
     char program_name[33];
+    char network_name[33];
+    char call_letters[7];
     char packet_type;
     char packet_class;
     /* buffer to store pkt data */
@@ -748,94 +754,46 @@ static void process_xds(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint8_
     ctx->prev_cmd[1] = lo;
 
     if (hi>=0x01 && hi<=0x0f) {
-      if ((hi-1)/2 == XDS_CLASS_END && ctx->packet_type == XDS_TYPE_PROGRAM_NAME && xds_program_inc > 0)  {
+      ctx->packet_class = (hi-1) / 2;
+      if(hi == 0x01) { 
+        ctx->packet_type = lo;
+      } else if (ctx->packet_class == XDS_CLASS_END && ctx->packet_type == XDS_TYPE_CALL_LETTERS_AND_CHANNEL && xds_call_inc > 0)  {
+	if(strcmp(ctx->call_letters,xds_call_letters)) {
+          memcpy(ctx->call_letters, xds_call_letters, 7);
+	  av_bprintf(&ctx->buffer, "\nCALL_LETTERS: %s\n", ctx->call_letters);
+	  //printf("CALL_LETTERS: %s\n",ctx->call_letters);
+          ctx->buffer_changed = 1;
+	}
+        for (int j=0;j<7;j++) {
+          xds_call_letters[j] = 0;
+        }
+        xds_call_inc = 0;
+      } else if (ctx->packet_class == XDS_CLASS_END && ctx->packet_type == XDS_TYPE_NETWORK_NAME && xds_network_inc > 0)  {
+	if(strcmp(ctx->network_name,xds_network_name)) {
+          memcpy(ctx->network_name, xds_network_name, 33);
+	  av_bprintf(&ctx->buffer, "\nNETWORK_NAME: %s\n", ctx->network_name);
+	  //printf("NETWORK_NAME: %s\n",ctx->network_name);
+          ctx->buffer_changed = 1;
+	}
+        for (int j=0;j<33;j++) {
+          xds_network_name[j] = 0;
+        }
+        xds_network_inc = 0;
+      } else if (ctx->packet_class == XDS_CLASS_END && ctx->packet_type == XDS_TYPE_PROGRAM_NAME && xds_program_inc > 0)  {
 	if(strcmp(ctx->program_name,xds_program_name)) {
           memcpy(ctx->program_name, xds_program_name, 33);
-	  av_bprintf(&ctx->buffer, "PROGRAM_NAME: %s", ctx->program_name);
+	  av_bprintf(&ctx->buffer, "\nPROGRAM_NAME: %s\n", ctx->program_name);
+	  //printf("PROGRAM_NAME: %s\n",ctx->program_name);
           ctx->buffer_changed = 1;
-  	  printf("PROGRAM_NAME: %s\n",ctx->program_name);
 	}
         for (int j=0;j<33;j++) {
           xds_program_name[j] = 0;
         }
         xds_program_inc = 0;
       }
-      ctx->packet_class = (hi-1)/2;
-    }
-
-    if ( (hi == 0x10 && (lo >= 0x40 && lo <= 0x5f)) ||
-       ( (hi >= 0x11 && hi <= 0x17) && (lo >= 0x40 && lo <= 0x7f) ) ) {
-        //printf("pac1: %d %d :: %d\n",hi,lo,(hi<=0x17)? 1 : 2);
-        //handle_pac(ctx, hi, lo);
-    } else if ( ( hi == 0x11 && lo >= 0x20 && lo <= 0x2f ) ||
-                ( hi == 0x17 && lo >= 0x2e && lo <= 0x2f) ) {
-        //printf("pac2: %d %d \n",hi,lo);
-        //handle_textattr(ctx, hi, lo);
-    } else if (hi == 0x14 || hi == 0x15 || hi == 0x1c) {
-        //printf("pac3: %d %d \n",hi,lo);
-        switch (lo) {
-        case 0x20:
-            /* resume caption loading */
-            ctx->mode = CCMODE_POPON;
-            break;
-        case 0x24:
-            handle_delete_end_of_row(ctx, hi, lo);
-            break;
-        case 0x25:
-        case 0x26:
-        case 0x27:
-            ctx->rollup = lo - 0x23;
-            ctx->mode = CCMODE_ROLLUP;
-            break;
-        case 0x29:
-            /* resume direct captioning */
-            ctx->mode = CCMODE_PAINTON;
-            break;
-        case 0x2b:
-            /* resume text display */
-            ctx->mode = CCMODE_TEXT;
-            break;
-        case 0x2c:
-            /* erase display memory */
-            //handle_edm(ctx, pts);
-            break;
-        case 0x2d:
-            /* carriage return */
-            ff_dlog(ctx, "carriage return\n");
-            if (!ctx->real_time)
-                reap_screen(ctx, pts);
-            roll_up(ctx);
-            ctx->cursor_column = 0;
-            break;
-        case 0x2e:
-            /* erase buffered (non displayed) memory */
-            // Only in realtime mode. In buffered mode, we re-use the inactive screen
-            // for our own buffering.
-            if (ctx->real_time) {
-                struct Screen *screen = ctx->screen + !ctx->active_screen;
-                screen->row_used = 0;
-            }
-            break;
-        case 0x2f:
-            /* end of caption */
-            ff_dlog(ctx, "handle_eoc\n");
-            //handle_eoc(ctx, pts);
-            break;
-        default:
-            printf("unknown command1: %d %d \n",hi,lo);
-            ff_dlog(ctx, "Unknown command 0x%hhx 0x%hhx\n", hi, lo);
-            break;
-        }
-    } else if (hi >= 0x11 && hi <= 0x13) {
-        /* Special characters */
-        printf("SPECIAL %c%c",hi,lo);
-        //printf("char1: %d %d %c\n",hi,lo,lo);
-        //handle_char(ctx, hi, lo, pts);
-    } else if (ctx->packet_class == XDS_CLASS_CHANNEL) {
-      //printf("CHANNEL: %c%c\n",hi,lo);
-    } else if (hi >= 0x20 && ctx->packet_class == XDS_CLASS_CURRENT) {
+    } else if (ctx->packet_class == XDS_CLASS_CURRENT) {
         /* Standard characters (always in pairs) */
-        if (ctx->packet_type == XDS_TYPE_PROGRAM_TYPE) {
+        if (ctx->packet_type == XDS_TYPE_PIN_START_TIME) {
           //printf("PIN TIME: %c%c\n",hi,lo);
         } else if (ctx->packet_type == XDS_TYPE_LENGH_AND_CURRENT_TIME) { 
           //printf("LENGTH TIME: %c%c\n",hi,lo);
@@ -843,29 +801,38 @@ static void process_xds(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint8_
           xds_program_name[xds_program_inc++] = hi;
           xds_program_name[xds_program_inc++] = lo;
         } else if (ctx->packet_type == XDS_TYPE_PROGRAM_TYPE) {
-          printf("TYPE: %c%c : %s\n",hi,lo,XDSProgramTypes[hi-0x20]);
-          //handle_char(ctx, hi, lo, pts);
-          //ctx->prev_cmd[0] = ctx->prev_cmd[1] = 0;
+          //printf("TYPE: %c%c : %s\n",hi,lo,XDSProgramTypes[hi-0x20]);
         } else if (ctx->packet_type == XDS_TYPE_CONTENT_ADVISORY) { 
           //printf("ADVISORY: %c%c\n",hi,lo);
+        } else if (ctx->packet_type <= 0x09) { 
+  	  //printf("unknown current class: %d packet: %d :: %d,%d %c%c\n",ctx->packet_class,ctx->packet_type,hi,lo,hi,lo);
+	} else { 
+  	  //printf("reserved current class: %d packet: %d :: %c%c\n",ctx->packet_class,ctx->packet_type,hi,lo);
+        }
+    } else if (ctx->packet_class == XDS_CLASS_CHANNEL) {
+        if (ctx->packet_type == XDS_TYPE_CALL_LETTERS_AND_CHANNEL) {
+          xds_call_letters[xds_call_inc++] = hi;
+          xds_call_letters[xds_call_inc++] = lo;
+        } else if (ctx->packet_type == XDS_TYPE_NETWORK_NAME) {
+          xds_network_name[xds_network_inc++] = hi;
+          xds_network_name[xds_network_inc++] = lo;
+        } else if (ctx->packet_type == 0x03) { 
+  	  //printf("unknown channel class: %d packet: %d :: %c%c\n",ctx->packet_class,ctx->packet_type,hi,lo);
+        } else if (ctx->packet_type == 0x04) { 
+  	  //printf("tsid channel class: %d packet: %d :: %c%c\n",ctx->packet_class,ctx->packet_type,hi,lo);
         } else {
-          printf("%d : %c%c\n",ctx->packet_type,hi,lo);
+  	  //printf("reserved channel class: %d packet: %d :: %c%c\n",ctx->packet_class,ctx->packet_type,hi,lo);
         }
-    // this looks wrong
-    } else if (hi == 0x17 && lo >= 0x21 && lo <= 0x23) {
-        int i;
-        /* Tab offsets (spacing) */
-        for (i = 0; i < lo - 0x20; i++) {
-            //printf("\n");
-            //handle_char(ctx, ' ', 0, pts);
-        }
+    } else if (ctx->packet_class == XDS_CLASS_MISC) {
+        /* Standard characters (always in pairs) */
+        if (ctx->packet_type == XDS_TYPE_TIME_OF_DAY) { 
+          //printf("NETWORK TIME: %c%c\n",hi,lo);
+	} else if (ctx->packet_type == XDS_TYPE_LOCAL_TIME_ZONE) { 
+          //printf("NETWORK TZ: %c%c\n",hi,lo);
+	}
     } else {
         /* Ignoring all other non data code */
-	if (hi == 1) {
-          ctx->packet_type = lo;
-        } else {
-          //printf("unknown command2: %d %d 0x%hhx 0x%hhx\n",hi,lo,hi,lo);
-        }
+        //printf("unknown xds class: %d packet: %d :: 0x%hhx 0x%hhx :: %c%c\n",ctx->packet_class,ctx->packet_type,hi,lo,hi,lo);
         ff_dlog(ctx, "Unknown command 0x%hhx 0x%hhx\n", hi, lo);
     }
 }
@@ -941,7 +908,7 @@ static void process_cc608(CCaptionSubContext *ctx, int64_t pts, uint8_t hi, uint
             handle_eoc(ctx, pts);
             break;
         default:
-            printf("unknown command1: %d %d \n",hi,lo);
+            //printf("unknown command1: %d %d \n",hi,lo);
             ff_dlog(ctx, "Unknown command 0x%hhx 0x%hhx\n", hi, lo);
             break;
         }
