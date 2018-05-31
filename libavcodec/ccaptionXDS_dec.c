@@ -679,7 +679,6 @@ static int xds_do_current_and_future (
 				
                 if (ctx->cur_xds_payload[i]>=0x20 && ctx->cur_xds_payload[i]<0x7F){
 					snprintf(tstr,str_len - (tstr - str),"[%s] ",XDSProgramTypes[ctx->cur_xds_payload[i]-0x20]);
-					printf("here: %s",tstr);
 					tstr += strlen(tstr);
 				}
 

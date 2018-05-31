@@ -1071,7 +1071,6 @@ static int h264_decode_cc(AVCodecContext *avctx, void *data,
         if (!cc){
             return 0;
         }
-	printf("DECODE!");
 
         cc_708_ctx* temp_cc_708_ctx = cc->cc708ctx;
         if (! temp_cc_708_ctx){
