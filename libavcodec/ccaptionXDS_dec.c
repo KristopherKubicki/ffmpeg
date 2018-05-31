@@ -534,7 +534,6 @@ static int xds_do_current_and_future (
 		return CC_EINVAL;
     }
 
-	printf("Kpacket type:",ctx->cur_xds_packet_type);
 	switch (ctx->cur_xds_packet_type){
 		case XDS_TYPE_PIN_START_TIME:
 			was_proc=1;
